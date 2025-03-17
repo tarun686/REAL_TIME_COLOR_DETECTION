@@ -1,13 +1,21 @@
+from flask import Flask, render_template, Response
 import cv2
 import pandas as pd
+import numpy as np
 
-# read values from csv file
+app = Flask(__name__)
+
+# Read color data from CSV
 index = ["color", "color_name", "hex", "R", "G", "B"]
 csv = pd.read_csv('colors.csv', names=index, header=None)
 
-# funtion to get the closest color name
+# Initialize variables for smoothing
+smooth_R, smooth_G, smooth_B = 0, 0, 0
+alpha = 0.2  
+
 def get_color_name(R, G, B):
     minimum = 10000
+    cname = "Unknown"
     for i in range(len(csv)):
         d = abs(R - int(csv.loc[i, "R"])) + abs(G - int(csv.loc[i, "G"])) + abs(B - int(csv.loc[i, "B"]))
         if d <= minimum:
@@ -15,47 +23,42 @@ def get_color_name(R, G, B):
             cname = csv.loc[i, "color_name"]
     return cname
 
-
-
 cap = cv2.VideoCapture(0)
-while(1):
-    _, frame = cap.read()
-    height, width, _ = frame.shape
 
-    # calculate centre position
-    cx = int(width / 2)
-    cy = int(height / 2)
+def generate_frames():
+    global smooth_R, smooth_G, smooth_B
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        else:
+            frame = cv2.flip(frame, 1)
+            height, width, _ = frame.shape
+            cx, cy = width // 2, height // 2
+            pixel_center = frame[cy, cx]
+            B, G, R = pixel_center
 
-    # Flip the frame horizontally (mirror effect)
-    frame = cv2.flip(frame, 1)
+            # Apply smoothing
+            smooth_R = alpha * R + (1 - alpha) * smooth_R
+            smooth_G = alpha * G + (1 - alpha) * smooth_G
+            smooth_B = alpha * B + (1 - alpha) * smooth_B
 
+            color_name = get_color_name(int(smooth_R), int(smooth_G), int(smooth_B))
+            cv2.rectangle(frame, (10, 10), (200, 50), (0, 0, 0), -1)
+            cv2.circle(frame, (220, 30), 20, (int(smooth_B), int(smooth_G), int(smooth_R)), -1)
+            cv2.putText(frame, color_name, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.circle(frame, (cx, cy), 3, (255, 255, 255), -1)
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-    pixel_center = frame[cy, cx]
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-    B, G, R = pixel_center
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-    #get color name
-    color_name = get_color_name(R,G,B)
-
-
-    # Create a black box
-    cv2.rectangle(frame, (10, 10), (200, 50), (0, 0, 0), -1)
-    cv2.circle(frame ,(220,30),20, (int (B),int (G), int (R)),-1 )
-
-    # Display the color name in white on the black box
-    cv2.putText(frame, color_name, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-    #to print corresponding B G R values
-    print(pixel_center)
-
-    cv2.circle(frame,(cx,cy),3,(225, 225, 225), -1)
-
-    #display image/video
-    cv2.imshow("Frame", frame)
-    key = cv2.waitKey(1)
-    if key == 27:
-        break
-
-
-cap.release()
-cv2.destroyAllWindows()
+if __name__ == '__main__':
+    app.run(debug=True)
